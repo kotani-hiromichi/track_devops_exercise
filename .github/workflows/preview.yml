@@ -1,0 +1,78 @@
+name: Preview (PR)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+env:
+  PROJECT_ID: ex-ai-training-program
+  GAR_LOCATION: asia-northeast1
+  REPOSITORY: cloud-run-source-deploy-kotani-0213
+  SERVICE_BASE: python-microservice-kotani-0213
+  REGION: asia-northeast1
+
+jobs:
+  build-deploy-preview:
+    runs-on: ubuntu-latest
+    if: github.event.action != 'closed'
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set SERVICE_NAME for preview
+        run: echo "SERVICE_NAME=${{ env.SERVICE_BASE }}-pr-${{ github.event.number }}" >> $GITHUB_ENV
+
+      - name: Authenticate to Google Cloud (Direct WIF)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        run: |
+          IMAGE="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          gcloud builds submit --tag "$IMAGE" .
+
+      - name: Deploy to Cloud Run (preview)
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          image: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          region: ${{ env.REGION }}
+          project_id: ${{ env.PROJECT_ID }}
+          flags: '--allow-unauthenticated'
+
+  cleanup-preview:
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed'
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Set SERVICE_NAME for cleanup
+        run: echo "SERVICE_NAME=${{ env.SERVICE_BASE }}-pr-${{ github.event.number }}" >> $GITHUB_ENV
+
+      - name: Authenticate to Google Cloud (Direct WIF)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Delete preview Cloud Run service
+        run: |
+          gcloud run services delete ${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --quiet
